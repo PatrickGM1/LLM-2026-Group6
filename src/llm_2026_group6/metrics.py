@@ -11,8 +11,6 @@ LABELS = ["anger", "anticipation", "disgust", "fear", "joy", "sadness", "surpris
 
 
 def parse_output(text):
-    """model text -> (8-dim 0/1 list, malformed flag)
-    only lowercase/whitespace normalisation, no synonym mapping. anything weird = empty + malformed"""
     m = re.search(r"\[.*?\]", text, re.S)
     if not m:
         return [0] * 8, True

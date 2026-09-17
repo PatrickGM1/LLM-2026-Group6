@@ -26,7 +26,6 @@ The possible emotions are:
 A line can express one or several of these emotions.
 Answer only with a JSON list of the matching emotion names in English, for example ["joy", "surprise"]. Do not add anything else."""
 
-# fixed demos for the 5-shot condition, picked once from the train split (seed 42, hand checked for alignment)
 DEMO_IDS = [
     "en/1990/100405/4706696.xml.gz:1158|ro/1990/100405/5055019.xml.gz:1116",
     "en/1990/100280/6059762.xml.gz:63|ro/1990/100280/4005082.xml.gz:73",
@@ -51,6 +50,22 @@ def build_messages(text, lang, demos):
         msgs.append({"role": "assistant", "content": answer(d["labels"])})
     msgs.append({"role": "user", "content": text})
     return msgs
+
+
+def generate(model, tok, rows, lang, demos=(), batch=16, max_new_tokens=40):
+    prompts = [tok.apply_chat_template(build_messages(r[lang], lang, demos),
+                                       tokenize=False, add_generation_prompt=True) for r in rows]
+    outputs = []
+    t0 = time.time()
+    for i in range(0, len(prompts), batch):
+        enc = tok(prompts[i:i + batch], return_tensors="pt", padding=True).to(model.device)
+        with torch.no_grad():
+            gen = model.generate(**enc, max_new_tokens=max_new_tokens, do_sample=False,
+                                 pad_token_id=tok.pad_token_id)
+        outputs += tok.batch_decode(gen[:, enc["input_ids"].shape[1]:], skip_special_tokens=True)
+        print(f"{len(outputs)}/{len(prompts)}  {time.time() - t0:.0f}s", end="\r")
+    print()
+    return outputs
 
 
 def main():
@@ -86,19 +101,8 @@ def main():
         model = PeftModel.from_pretrained(model, args.adapter)
     model.eval()
 
-    prompts = [tok.apply_chat_template(build_messages(r[args.lang], args.lang, demos),
-                                       tokenize=False, add_generation_prompt=True) for r in rows]
-
-    outputs = []
     t0 = time.time()
-    for i in range(0, len(prompts), args.batch):
-        enc = tok(prompts[i:i + args.batch], return_tensors="pt", padding=True).to(model.device)
-        with torch.no_grad():
-            gen = model.generate(**enc, max_new_tokens=args.max_new_tokens, do_sample=False,
-                                 pad_token_id=tok.pad_token_id)
-        outputs += tok.batch_decode(gen[:, enc["input_ids"].shape[1]:], skip_special_tokens=True)
-        print(f"{i + len(outputs) - i}/{len(prompts)}  {time.time() - t0:.0f}s", end="\r")
-    print()
+    outputs = generate(model, tok, rows, args.lang, demos, args.batch, args.max_new_tokens)
 
     parsed = [parse_output(o) for o in outputs]
     pred = [p for p, _ in parsed]
