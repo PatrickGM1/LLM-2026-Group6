@@ -1,3 +1,6 @@
-.venv
-.ruff_cache
- 
+.venv/
+__pycache__/
+.ruff_cache/
+.ipynb_checkpoints/
+.env
+data/splits/
