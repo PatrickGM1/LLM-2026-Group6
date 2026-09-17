@@ -111,7 +111,7 @@ def main():
 
     name = args.name or f"prompt_{args.model.split('/')[-1]}_{args.shots}shot_{args.lang}_{args.split}"
     if args.adapter:
-        name = args.name or f"lora_{Path(args.adapter).parent.name}_{args.lang}_{args.split}"
+        name = args.name or f"{Path(args.adapter).parent.name}_{args.lang}_{args.split}"
     out = ROOT / "runs" / name
     out.mkdir(parents=True, exist_ok=True)
     with open(out / "preds.jsonl", "w", encoding="utf-8") as f:
