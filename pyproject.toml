@@ -1,0 +1,19 @@
+[project]
+name = "llm-2026-group6"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Patrick Gheba", email = "patrickgheba@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy==1.26.0",
+]
+
+[project.scripts]
+llm-2026-group6 = "llm_2026_group6:main"
+
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"
