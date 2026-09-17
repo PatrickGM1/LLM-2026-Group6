@@ -44,7 +44,8 @@ rows = []
 seen = set()
 for en_file, ro_file, en_idx, ro_idx, en, ro in read_tsv(RAW / "pairs-ro.txt", 6):
     k = norm(ro)
-    if k not in ro_labels or k in seen:
+    # about half the pairs are danish->romanian, we only want the english ones
+    if not en_file.startswith("en/") or k not in ro_labels or k in seen:
         continue
     seen.add(k)
     rows.append(
