@@ -68,6 +68,42 @@ def generate(model, tok, rows, lang, demos=(), batch=16, max_new_tokens=40):
     return outputs
 
 
+def threshold_decode(model, tok, rows, lang, demos, threshold, batch=16):
+    prompts = [tok.apply_chat_template(build_messages(r[lang], lang, demos),
+                                       tokenize=False, add_generation_prompt=True) for r in rows]
+    chosen = [[] for _ in rows]
+    probs = [[0.0] * 8 for _ in rows]
+    t0 = time.time()
+    for i, lab in enumerate(LABELS):
+        for b in range(0, len(rows), batch):
+            ids, spans = [], []
+            for k in range(b, min(b + batch, len(rows))):
+                names = [LABELS[j] for j in chosen[k]]
+                so_far = '["' + '", "'.join(names) if names else ""
+                cont = ('", "' if names else '["') + lab
+                a = tok(prompts[k] + so_far, add_special_tokens=False)["input_ids"]
+                c = tok(cont, add_special_tokens=False)["input_ids"]
+                ids.append(a + c)
+                spans.append(len(c))
+            n = max(map(len, ids))
+            x = torch.tensor([[tok.pad_token_id] * (n - len(t)) + t for t in ids], device=model.device)
+            mask = torch.tensor([[0] * (n - len(t)) + [1] * len(t) for t in ids], device=model.device)
+            pos = (mask.cumsum(-1) - 1).clamp(min=0)
+            with torch.no_grad():
+                logp = torch.log_softmax(model(input_ids=x, attention_mask=mask, position_ids=pos).logits.float(), -1)
+            for row, (t, m) in enumerate(zip(ids, spans)):
+                tgt = x[row, n - m:]
+                lp = logp[row, n - m - 1:n - 1].gather(1, tgt[:, None]).sum().item()
+                pr = float(torch.exp(torch.tensor(lp)))
+                probs[b + row][i] = pr
+                if pr > threshold:
+                    chosen[b + row].append(i)
+        print(f"{lab} done  {time.time() - t0:.0f}s", end="\r")
+    print()
+    preds = [[int(j in c) for j in range(8)] for c in chosen]
+    return preds, probs
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen2.5-1.5B-Instruct")
@@ -80,6 +116,8 @@ def main():
     ap.add_argument("--4bit", dest="four_bit", action="store_true")
     ap.add_argument("--limit", type=int, default=None, help="only first n rows, for testing")
     ap.add_argument("--name", default=None)
+    ap.add_argument("--threshold", type=float, default=None,
+                    help="instead of greedy generation, add each label if its probability is above this")
     args = ap.parse_args()
 
     rows = load(args.split)[: args.limit]
@@ -102,26 +140,35 @@ def main():
     model.eval()
 
     t0 = time.time()
-    outputs = generate(model, tok, rows, args.lang, demos, args.batch, args.max_new_tokens)
-
-    parsed = [parse_output(o) for o in outputs]
-    pred = [p for p, _ in parsed]
-    malformed = [m for _, m in parsed]
+    if args.threshold is None:
+        outputs = generate(model, tok, rows, args.lang, demos, args.batch, args.max_new_tokens)
+        parsed = [parse_output(o) for o in outputs]
+        pred = [p for p, _ in parsed]
+        malformed = [m for _, m in parsed]
+        probs = [None] * len(rows)
+    else:
+        pred, probs = threshold_decode(model, tok, rows, args.lang, demos, args.threshold, args.batch)
+        outputs = [json.dumps([l for l, v in zip(LABELS, p) if v]) for p in pred]
+        malformed = [False] * len(rows)
     gold = [r["labels"] for r in rows]
 
     name = args.name or f"prompt_{args.model.split('/')[-1]}_{args.shots}shot_{args.lang}_{args.split}"
     if args.adapter:
         name = args.name or f"{Path(args.adapter).parent.name}_{args.lang}_{args.split}"
+    if args.threshold is not None:
+        name += f"_t{args.threshold}"
     out = ROOT / "runs" / name
     out.mkdir(parents=True, exist_ok=True)
     with open(out / "preds.jsonl", "w", encoding="utf-8") as f:
-        for r, o, p, m in zip(rows, outputs, pred, malformed):
+        for r, o, p, m, pr in zip(rows, outputs, pred, malformed, probs):
             f.write(json.dumps({"id": r["id"], "text": r[args.lang], "output": o, "pred": p,
-                                "gold": r["labels"], "malformed": m}, ensure_ascii=False) + "\n")
+                                "gold": r["labels"], "malformed": m,
+                                "probs": pr and [round(x, 4) for x in pr]}, ensure_ascii=False) + "\n")
 
     print(f"== {name} ==")
     metrics = evaluate(pred, gold, malformed, verbose=True)
-    metrics["config"] = {**vars(args), "system_prompt": SYSTEM, "demo_ids": DEMO_IDS, "decoding": "greedy",
+    metrics["config"] = {**vars(args), "system_prompt": SYSTEM, "demo_ids": DEMO_IDS,
+                         "decoding": "greedy" if args.threshold is None else f"label threshold {args.threshold}",
                          "seconds": round(time.time() - t0), "n": len(rows),
                          "hardware": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"}
     json.dump(metrics, open(out / "metrics.json", "w"), indent=2)
