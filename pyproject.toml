@@ -9,10 +9,28 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "iterative-stratification>=0.1.9",
+    "matplotlib>=3.11.2",
     "numpy==1.26.0",
+    "peft>=0.21.0",
     "scikit-learn>=1.9.1",
+    "torch>=2.14.0",
+    "transformers>=5.17.0",
 ]
 
 [build-system]
 requires = ["uv_build>=0.12.15,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
+    "jupyter>=1.1.1",
+]
