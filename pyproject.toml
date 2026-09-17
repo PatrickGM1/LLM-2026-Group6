@@ -8,6 +8,8 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "accelerate>=1.15.0",
+    "bitsandbytes>=0.50.2",
     "iterative-stratification>=0.1.9",
     "matplotlib>=3.11.2",
     "numpy==1.26.0",
