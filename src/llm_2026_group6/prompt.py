@@ -89,11 +89,13 @@ def threshold_decode(model, tok, rows, lang, demos, threshold, batch=16):
             x = torch.tensor([[tok.pad_token_id] * (n - len(t)) + t for t in ids], device=model.device)
             mask = torch.tensor([[0] * (n - len(t)) + [1] * len(t) for t in ids], device=model.device)
             pos = (mask.cumsum(-1) - 1).clamp(min=0)
+            keep = max(spans) + 1
             with torch.no_grad():
-                logp = torch.log_softmax(model(input_ids=x, attention_mask=mask, position_ids=pos).logits.float(), -1)
+                logits = model(input_ids=x, attention_mask=mask, position_ids=pos, logits_to_keep=keep).logits
             for row, (t, m) in enumerate(zip(ids, spans)):
                 tgt = x[row, n - m:]
-                lp = logp[row, n - m - 1:n - 1].gather(1, tgt[:, None]).sum().item()
+                sl = logits[row, keep - m - 1:keep - 1].float()
+                lp = (sl.gather(1, tgt[:, None]).squeeze(1) - torch.logsumexp(sl, -1)).sum().item()
                 pr = float(torch.exp(torch.tensor(lp)))
                 probs[b + row][i] = pr
                 if pr > threshold:
