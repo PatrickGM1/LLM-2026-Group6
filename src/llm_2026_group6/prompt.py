@@ -79,14 +79,14 @@ def build_prompts(tok, rows, lang, demos, system=SYSTEM):
                                     add_generation_prompt=True) for r in rows]
 
 
-def generate(model, tok, rows, lang, demos=(), batch=16, max_new_tokens=40, system=SYSTEM):
+def generate(model, tok, rows, lang, demos=(), batch=16, system=SYSTEM):
     prompts = build_prompts(tok, rows, lang, demos, system)
     outputs = []
     t0 = time.time()
     for i in range(0, len(prompts), batch):
         enc = tok(prompts[i:i + batch], return_tensors="pt", padding=True).to(model.device)
         with torch.no_grad():
-            gen = model.generate(**enc, max_new_tokens=max_new_tokens, do_sample=False,
+            gen = model.generate(**enc, max_new_tokens=40, do_sample=False,
                                  pad_token_id=tok.pad_token_id)
         outputs += tok.batch_decode(gen[:, enc["input_ids"].shape[1]:], skip_special_tokens=True)
         print(f"{len(outputs)}/{len(prompts)}  {time.time() - t0:.0f}s", end="\r")
@@ -139,7 +139,6 @@ def main():
     ap.add_argument("--split", default="dev", choices=["dev", "test"])
     ap.add_argument("--adapter", default=None, help="path to a lora adapter, optional")
     ap.add_argument("--batch", type=int, default=16)
-    ap.add_argument("--max_new_tokens", type=int, default=40)
     ap.add_argument("--4bit", dest="four_bit", action="store_true")
     ap.add_argument("--limit", type=int, default=None, help="only first n rows, for testing")
     ap.add_argument("--prompt", default="default", choices=list(PROMPTS), help="system prompt wording")
@@ -168,7 +167,7 @@ def main():
 
     t0 = time.time()
     if args.threshold is None:
-        outputs = generate(model, tok, rows, args.lang, demos, args.batch, args.max_new_tokens, PROMPTS[args.prompt])
+        outputs = generate(model, tok, rows, args.lang, demos, args.batch, PROMPTS[args.prompt])
         parsed = [parse_output(o) for o in outputs]
         pred = [p for p, _ in parsed]
         malformed = [m for _, m in parsed]

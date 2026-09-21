@@ -16,11 +16,6 @@ for f in sorted(glob.glob(str(ROOT / "runs/*/metrics.json"))):
     m = json.load(open(f))
     rows.append((Path(f).parent.name, m["micro_f1"], m["samples_jaccard"], m["macro_f1"], m["micro_precision"],
                  m["micro_recall"], m["hamming_loss"], m.get("malformed_rate", 0), m["config"].get("seconds", 0)))
-for f in sorted(glob.glob(str(ROOT / "runs/*/results.json"))):
-    r = json.load(open(f))
-    for lang, m in r["test"].items():
-        rows.append((f"{Path(f).parent.name}_test_{lang}", m["micro_f1"], m["samples_jaccard"], m["macro_f1"],
-                     m["micro_precision"], m["micro_recall"], m["hamming_loss"], 0, 0))
 
 print(f"{'run':55s} {'miF1':>6s} {'jacc':>6s} {'maF1':>6s} {'prec':>6s} {'rec':>6s} {'hamm':>6s} {'malf':>6s} {'sec':>5s}")
 for r in rows:

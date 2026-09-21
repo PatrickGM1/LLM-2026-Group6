@@ -8,15 +8,13 @@ instruct model on the XED emotion dataset, English and Romanian.
 ```
 data/raw/        xed files: en-annotated.tsv, ro-projections.tsv, pairs-ro.txt
 data/splits/     train/dev/test.jsonl, made by split.py (gitignored, deterministic)
-docs/            project brief + syllabus
-reference/       Öhman et al. BERT notebook we started from, not our code
+docs/            project brief
 src/llm_2026_group6/
   split.py       70/20/10 split by alignment id, multi-label stratified, seed 42
   metrics.py     label list, output parser, metrics from the brief
   prompt.py      zero/five-shot prompting, adapter eval, threshold decoding
   train_lora.py  LoRA/QLoRA fine-tuning, checkpoint selection on dev
   summary.py     table of every run in runs/
-  BERT_COLING_NER_Group6.ipynb   XLM-R + LoRA encoder baseline
 run_all.sh       every experiment in order
 runs/            outputs, one folder per run (gitignored)
 ```

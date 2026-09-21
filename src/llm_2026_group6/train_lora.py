@@ -17,6 +17,10 @@ from transformers import (AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfi
 from llm_2026_group6.metrics import evaluate, parse_output
 from llm_2026_group6.prompt import ROOT, answer, build_messages, generate, load
 
+LORA = dict(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM",
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"])
+MAX_LEN = 320
+
 
 def make_examples(rows, train_on):
     langs = ["en", "ro"] if train_on == "both" else [train_on]
@@ -56,10 +60,6 @@ def main():
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--grad_accum", type=int, default=2)
-    ap.add_argument("--max_len", type=int, default=320)
-    ap.add_argument("--r", type=int, default=16)
-    ap.add_argument("--alpha", type=int, default=32)
-    ap.add_argument("--dropout", type=float, default=0.05)
     ap.add_argument("--4bit", dest="four_bit", action="store_true", help="qlora, needed on small gpus")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--dev_limit", type=int, default=None, help="eval checkpoints on a subset of dev")
@@ -84,16 +84,13 @@ def main():
     model.gradient_checkpointing_enable()
     model.enable_input_require_grads()
 
-    targets = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-    lora = LoraConfig(r=args.r, lora_alpha=args.alpha, lora_dropout=args.dropout, task_type="CAUSAL_LM",
-                      target_modules=targets)
-    model = get_peft_model(model, lora)
+    model = get_peft_model(model, LoraConfig(**LORA))
     for p in model.parameters():
         if p.requires_grad:
             p.data = p.data.float()
     model.print_trainable_parameters()
 
-    train_ds = ChatDataset(make_examples(load("train"), args.train_on), tok, args.max_len)
+    train_ds = ChatDataset(make_examples(load("train"), args.train_on), tok, MAX_LEN)
     dev_rows = load("dev")[: args.dev_limit]
     print("train examples", len(train_ds), "dev rows", len(dev_rows))
 
@@ -135,7 +132,7 @@ def main():
     shutil.copytree(out / "ckpt" / best, out / "best")
     print("best:", best)
 
-    json.dump({**vars(args), "lora_targets": targets,
+    json.dump({**vars(args), **LORA, "max_len": MAX_LEN,
                "quantization": "nf4 double quant fp16 compute" if args.four_bit else "none (fp16 base)",
                "checkpoint_rule": f"best dev({sel_lang}) micro-F1 over epoch checkpoints", "dev_scores": scores, "best": best,
                "train_seconds": round(train_time), "train_examples": len(train_ds),
