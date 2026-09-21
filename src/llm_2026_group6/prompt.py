@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import time
 from pathlib import Path
 
@@ -52,9 +53,13 @@ def build_messages(text, lang, demos):
     return msgs
 
 
+def build_prompts(tok, rows, lang, demos):
+    return [tok.apply_chat_template(build_messages(r[lang], lang, demos), tokenize=False, add_generation_prompt=True)
+            for r in rows]
+
+
 def generate(model, tok, rows, lang, demos=(), batch=16, max_new_tokens=40):
-    prompts = [tok.apply_chat_template(build_messages(r[lang], lang, demos),
-                                       tokenize=False, add_generation_prompt=True) for r in rows]
+    prompts = build_prompts(tok, rows, lang, demos)
     outputs = []
     t0 = time.time()
     for i in range(0, len(prompts), batch):
@@ -69,8 +74,7 @@ def generate(model, tok, rows, lang, demos=(), batch=16, max_new_tokens=40):
 
 
 def threshold_decode(model, tok, rows, lang, demos, threshold, batch=16):
-    prompts = [tok.apply_chat_template(build_messages(r[lang], lang, demos),
-                                       tokenize=False, add_generation_prompt=True) for r in rows]
+    prompts = build_prompts(tok, rows, lang, demos)
     chosen = [[] for _ in rows]
     probs = [[0.0] * 8 for _ in rows]
     t0 = time.time()
@@ -96,8 +100,8 @@ def threshold_decode(model, tok, rows, lang, demos, threshold, batch=16):
                 tgt = x[row, n - m:]
                 sl = logits[row, keep - m - 1:keep - 1].float()
                 lp = (sl.gather(1, tgt[:, None]).squeeze(1) - torch.logsumexp(sl, -1)).sum().item()
-                pr = float(torch.exp(torch.tensor(lp)))
-                probs[b + row][i] = pr
+                pr = math.exp(lp)
+                probs[b + row][i] = round(pr, 4)
                 if pr > threshold:
                     chosen[b + row].append(i)
         print(f"{lab} done  {time.time() - t0:.0f}s", end="\r")
@@ -117,7 +121,6 @@ def main():
     ap.add_argument("--max_new_tokens", type=int, default=40)
     ap.add_argument("--4bit", dest="four_bit", action="store_true")
     ap.add_argument("--limit", type=int, default=None, help="only first n rows, for testing")
-    ap.add_argument("--name", default=None)
     ap.add_argument("--threshold", type=float, default=None,
                     help="instead of greedy generation, add each label if its probability is above this")
     args = ap.parse_args()
@@ -147,25 +150,27 @@ def main():
         parsed = [parse_output(o) for o in outputs]
         pred = [p for p, _ in parsed]
         malformed = [m for _, m in parsed]
-        probs = [None] * len(rows)
+        probs = None
     else:
         pred, probs = threshold_decode(model, tok, rows, args.lang, demos, args.threshold, args.batch)
         outputs = [json.dumps([l for l, v in zip(LABELS, p) if v]) for p in pred]
         malformed = [False] * len(rows)
     gold = [r["labels"] for r in rows]
 
-    name = args.name or f"prompt_{args.model.split('/')[-1]}_{args.shots}shot_{args.lang}_{args.split}"
     if args.adapter:
-        name = args.name or f"{Path(args.adapter).parent.name}_{args.lang}_{args.split}"
+        name = f"{Path(args.adapter).parent.name}_{args.lang}_{args.split}"
+    else:
+        name = f"prompt_{args.model.split('/')[-1]}_{args.shots}shot_{args.lang}_{args.split}"
     if args.threshold is not None:
         name += f"_t{args.threshold}"
     out = ROOT / "runs" / name
     out.mkdir(parents=True, exist_ok=True)
     with open(out / "preds.jsonl", "w", encoding="utf-8") as f:
-        for r, o, p, m, pr in zip(rows, outputs, pred, malformed, probs):
-            f.write(json.dumps({"id": r["id"], "text": r[args.lang], "output": o, "pred": p,
-                                "gold": r["labels"], "malformed": m,
-                                "probs": pr and [round(x, 4) for x in pr]}, ensure_ascii=False) + "\n")
+        for i, (r, o, p, m) in enumerate(zip(rows, outputs, pred, malformed)):
+            row = {"id": r["id"], "text": r[args.lang], "output": o, "pred": p, "gold": r["labels"], "malformed": m}
+            if probs:
+                row["probs"] = probs[i]
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     print(f"== {name} ==")
     metrics = evaluate(pred, gold, malformed, verbose=True)

@@ -3,7 +3,11 @@
 
 import glob
 import json
+import re
+from collections import defaultdict
 from pathlib import Path
+
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -27,10 +31,6 @@ for f in sorted(glob.glob(str(ROOT / "runs/*/train_config.json"))):
     print(f"\n{Path(f).parent.name}: best={c['best']} train {c['train_seconds']}s on {c['hardware']}, dev scores {c['dev_scores']}")
 
 # mean +- std over seeds for the lora runs
-import re
-from collections import defaultdict
-import numpy as np
-
 groups = defaultdict(list)
 for r in rows:
     m = re.match(r"(lora_.*)_s\d+(_.*)", r[0])

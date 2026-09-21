@@ -63,12 +63,10 @@ def main():
     ap.add_argument("--4bit", dest="four_bit", action="store_true", help="qlora, needed on small gpus")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--dev_limit", type=int, default=None, help="eval checkpoints on a subset of dev")
-    ap.add_argument("--train_file", default=None)
-    ap.add_argument("--name", default=None)
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
-    name = args.name or f"lora_{args.model.split('/')[-1]}_{args.train_on}_s{args.seed}"
+    name = f"lora_{args.model.split('/')[-1]}_{args.train_on}_s{args.seed}"
     out = ROOT / "runs" / name
     out.mkdir(parents=True, exist_ok=True)
 
@@ -86,16 +84,16 @@ def main():
     model.gradient_checkpointing_enable()
     model.enable_input_require_grads()
 
+    targets = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
     lora = LoraConfig(r=args.r, lora_alpha=args.alpha, lora_dropout=args.dropout, task_type="CAUSAL_LM",
-                      target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"])
+                      target_modules=targets)
     model = get_peft_model(model, lora)
     for p in model.parameters():
         if p.requires_grad:
             p.data = p.data.float()
     model.print_trainable_parameters()
 
-    train_rows = load("train") if not args.train_file else [json.loads(l) for l in open(args.train_file, encoding="utf-8")]
-    train_ds = ChatDataset(make_examples(train_rows, args.train_on), tok, args.max_len)
+    train_ds = ChatDataset(make_examples(load("train"), args.train_on), tok, args.max_len)
     dev_rows = load("dev")[: args.dev_limit]
     print("train examples", len(train_ds), "dev rows", len(dev_rows))
 
@@ -137,7 +135,7 @@ def main():
     shutil.copytree(out / "ckpt" / best, out / "best")
     print("best:", best)
 
-    json.dump({**vars(args), "lora_targets": lora.target_modules if isinstance(lora.target_modules, list) else sorted(lora.target_modules),
+    json.dump({**vars(args), "lora_targets": targets,
                "quantization": "nf4 double quant fp16 compute" if args.four_bit else "none (fp16 base)",
                "checkpoint_rule": f"best dev({sel_lang}) micro-F1 over epoch checkpoints", "dev_scores": scores, "best": best,
                "train_seconds": round(train_time), "train_examples": len(train_ds),
