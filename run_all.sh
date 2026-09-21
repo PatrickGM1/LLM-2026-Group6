@@ -28,6 +28,7 @@ A=runs/lora_Qwen2.5-1.5B-Instruct
 T=0.15
 
 $P.split
+$P.baselines
 
 # prompting, both models, dev
 for m in $M1 $M2; do for s in 0 5; do for l in en ro; do
@@ -38,6 +39,11 @@ done; done; done
 for v in short long; do for s in 0 5; do for l in en ro; do
   $P.prompt --model $M1 --shots $s --lang $l --batch 64 --prompt $v
 done; done; done
+
+# threshold decoding on the prompting side too, so the peft comparison is decoding-matched
+for l in en ro; do
+  $P.prompt --model $M1 --shots 5 --lang $l --batch 64 --threshold $T
+done
 
 # lora, 3 conditions x 3 seeds, checkpoint picked on dev
 for s in 42 1 2; do for c in en ro both; do
@@ -65,3 +71,4 @@ for s in 42 1 2; do for c in en ro both; do for l in en ro; do
 done; done; done
 
 $P.summary
+$P.errors ${A}_both_s42_ro_test_t$T prompt_Qwen2.5-1.5B-Instruct_5shot_ro_test

@@ -4,6 +4,7 @@ import json
 import re
 
 import numpy as np
+import sklearn
 from sklearn.metrics import (accuracy_score, classification_report, f1_score, hamming_loss,
                              jaccard_score, precision_score, recall_score)
 
@@ -34,9 +35,10 @@ def evaluate(pred, gold, malformed=None, verbose=False):
     if malformed is not None:
         m["malformed_rate"] = float(np.mean(malformed))
     m["per_label"] = classification_report(gold, pred, target_names=LABELS, zero_division=0, output_dict=True)
+    m["sklearn"] = sklearn.__version__
     if verbose:
         for k, v in m.items():
-            if k != "per_label":
+            if isinstance(v, float):
                 print(f"{k:16s} {v:.4f}")
         print(classification_report(gold, pred, target_names=LABELS, zero_division=0, digits=3))
     return m

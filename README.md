@@ -15,6 +15,8 @@ src/llm_2026_group6/
   prompt.py      zero/five-shot prompting, adapter eval, threshold decoding
   train_lora.py  LoRA/QLoRA fine-tuning, checkpoint selection on dev
   summary.py     table of every run in runs/
+  baselines.py   zero / majority / random floors
+  errors.py      side by side disagreements of two runs, for the error analysis
 run_all.sh       every experiment in order
 runs/            outputs, one folder per run (gitignored)
 ```
