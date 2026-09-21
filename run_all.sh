@@ -34,6 +34,11 @@ for m in $M1 $M2; do for s in 0 5; do for l in en ro; do
   $P.prompt --model $m --shots $s --lang $l --batch 64
 done; done; done
 
+# prompt wording sensitivity, dev only
+for v in short long; do for s in 0 5; do for l in en ro; do
+  $P.prompt --model $M1 --shots $s --lang $l --batch 64 --prompt $v
+done; done; done
+
 # lora, 3 conditions x 3 seeds, checkpoint picked on dev
 for s in 42 1 2; do for c in en ro both; do
   $P.train_lora --train_on $c --seed $s --dev_limit 500

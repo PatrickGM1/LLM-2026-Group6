@@ -27,6 +27,27 @@ The possible emotions are:
 A line can express one or several of these emotions.
 Answer only with a JSON list of the matching emotion names in English, for example ["joy", "surprise"]. Do not add anything else."""
 
+PROMPTS = {
+    "default": SYSTEM,
+    "short": """Which emotions does this subtitle line express? Choose from: anger, anticipation, disgust, fear, joy, sadness, surprise, trust. Several can apply. Reply with a JSON list of the chosen names, nothing else.""",
+    "long": """You are an annotator working on the XED emotion dataset. You will be shown a single line of movie dialogue, without any context. Your task is to decide which of Plutchik's eight basic emotions the speaker is expressing.
+
+The eight emotions and what they cover:
+1. anger - the speaker is angry, hostile, annoyed or aggressive
+2. anticipation - the speaker expects, plans, waits for or looks forward to something
+3. disgust - the speaker feels disgust, contempt or strong disapproval
+4. fear - the speaker is afraid, nervous, worried or feels threatened
+5. joy - the speaker is happy, amused, pleased or enthusiastic
+6. sadness - the speaker is sad, disappointed, hurt or grieving
+7. surprise - the speaker is surprised, shocked or did not expect something
+8. trust - the speaker expresses trust, reassurance, acceptance or reliance on someone
+
+Rules:
+- A line often expresses more than one emotion. Return all that clearly apply.
+- Use only the eight names above, in English, exactly as written.
+- Output format: a JSON list of strings, e.g. ["fear", "surprise"]. No explanation, no other text.""",
+}
+
 DEMO_IDS = [
     "en/1990/100405/4706696.xml.gz:1158|ro/1990/100405/5055019.xml.gz:1116",
     "en/1990/100280/6059762.xml.gz:63|ro/1990/100280/4005082.xml.gz:73",
@@ -44,8 +65,8 @@ def answer(labels):
     return json.dumps([l for l, v in zip(LABELS, labels) if v])
 
 
-def build_messages(text, lang, demos):
-    msgs = [{"role": "system", "content": SYSTEM}]
+def build_messages(text, lang, demos, system=SYSTEM):
+    msgs = [{"role": "system", "content": system}]
     for d in demos:
         msgs.append({"role": "user", "content": d[lang]})
         msgs.append({"role": "assistant", "content": answer(d["labels"])})
@@ -53,13 +74,13 @@ def build_messages(text, lang, demos):
     return msgs
 
 
-def build_prompts(tok, rows, lang, demos):
-    return [tok.apply_chat_template(build_messages(r[lang], lang, demos), tokenize=False, add_generation_prompt=True)
-            for r in rows]
+def build_prompts(tok, rows, lang, demos, system=SYSTEM):
+    return [tok.apply_chat_template(build_messages(r[lang], lang, demos, system), tokenize=False,
+                                    add_generation_prompt=True) for r in rows]
 
 
-def generate(model, tok, rows, lang, demos=(), batch=16, max_new_tokens=40):
-    prompts = build_prompts(tok, rows, lang, demos)
+def generate(model, tok, rows, lang, demos=(), batch=16, max_new_tokens=40, system=SYSTEM):
+    prompts = build_prompts(tok, rows, lang, demos, system)
     outputs = []
     t0 = time.time()
     for i in range(0, len(prompts), batch):
@@ -121,6 +142,7 @@ def main():
     ap.add_argument("--max_new_tokens", type=int, default=40)
     ap.add_argument("--4bit", dest="four_bit", action="store_true")
     ap.add_argument("--limit", type=int, default=None, help="only first n rows, for testing")
+    ap.add_argument("--prompt", default="default", choices=list(PROMPTS), help="system prompt wording")
     ap.add_argument("--threshold", type=float, default=None,
                     help="instead of greedy generation, add each label if its probability is above this")
     args = ap.parse_args()
@@ -146,7 +168,7 @@ def main():
 
     t0 = time.time()
     if args.threshold is None:
-        outputs = generate(model, tok, rows, args.lang, demos, args.batch, args.max_new_tokens)
+        outputs = generate(model, tok, rows, args.lang, demos, args.batch, args.max_new_tokens, PROMPTS[args.prompt])
         parsed = [parse_output(o) for o in outputs]
         pred = [p for p, _ in parsed]
         malformed = [m for _, m in parsed]
@@ -163,6 +185,8 @@ def main():
         name = f"prompt_{args.model.split('/')[-1]}_{args.shots}shot_{args.lang}_{args.split}"
     if args.threshold is not None:
         name += f"_t{args.threshold}"
+    if args.prompt != "default":
+        name += f"_p{args.prompt}"
     out = ROOT / "runs" / name
     out.mkdir(parents=True, exist_ok=True)
     with open(out / "preds.jsonl", "w", encoding="utf-8") as f:
@@ -174,7 +198,7 @@ def main():
 
     print(f"== {name} ==")
     metrics = evaluate(pred, gold, malformed, verbose=True)
-    metrics["config"] = {**vars(args), "system_prompt": SYSTEM, "demo_ids": DEMO_IDS,
+    metrics["config"] = {**vars(args), "system_prompt": PROMPTS[args.prompt], "demo_ids": DEMO_IDS,
                          "decoding": "greedy" if args.threshold is None else f"label threshold {args.threshold}",
                          "seconds": round(time.time() - t0), "n": len(rows),
                          "hardware": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"}
