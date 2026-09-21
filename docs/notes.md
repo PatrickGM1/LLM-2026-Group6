@@ -142,6 +142,42 @@ EuroLLM 0-shot 37% / 16%. Fine-tuned adapters 0%.
 Historical reference, not comparable (different data size, splits, neutral class):
 Ohman et al. 2020 report micro-F1 0.536 for English BERT on the full 17.5k lines.
 
+### Prompt wording sensitivity (dev, micro-F1 / malformed rate)
+
+| prompt | 0-shot EN | 0-shot RO | 5-shot EN | 5-shot RO |
+|---|---|---|---|---|
+| default | 0.280 / 17% | 0.238 / 11% | 0.415 / 2% | 0.340 / 1% |
+| short | 0.222 / 49% | 0.246 / 17% | 0.431 / 2% | 0.336 / 2% |
+| long | 0.331 / 3% | 0.252 / 2% | 0.429 / 2% | 0.340 / 2% |
+
+Zero-shot swings by 11 points and malformed rate by 3-49% depending on wording (the short prompt
+without an output example makes the model drop the quotes). Five-shot moves at most 1.6 points -
+the demonstrations decide the format and the label prior, the wording barely matters.
+
+### Threshold decoding applied to prompting (dev)
+
+5-shot + t=0.15: EN 0.415 (greedy 0.415), RO 0.337 (greedy 0.340). No gain. The prompted model
+already outputs 1.2-1.5 labels per line, so it isn't collapsed the way the fine-tuned one is, and its
+per-label probabilities aren't calibrated for this task. So the PEFT advantage survives a
+decoding-matched comparison: it isn't a decoding artefact.
+
+### Baselines (test, micro-F1)
+
+zero 0.000, majority (always anger) 0.230, random at train label frequency 0.197.
+
+### Error analysis (test RO, bilingual LoRA t=0.15 vs 5-shot)
+
+485 rows: exact match LoRA-only 34, prompt-only 37, both wrong 398. Exact match is similar, the F1
+gap comes from partial credit on multi-label rows. Patterns:
+- LoRA over-predicts under the threshold ("Mi-am facut bagajele" gold joy -> anticipation,joy,trust).
+  That is the recall/precision trade the threshold buys.
+- Prompting emits non-permitted names ("anguish"), dropped by the parser as the brief requires.
+- Context-free lines are unlabelable: "Credeam ca sunt cel mai bun jucator din lume" (I thought I was
+  the best player in the world) gold = sadness. Only makes sense with the previous line.
+- Projection artefacts: "Am spart-o" gold anger,fear comes from English "Well, that broke that up".
+- Test contains near-duplicates differing only in diacritics ("Cooper, da-mi cuiele aici!" twice);
+  our dedup is on English text so both land in the same partition, which is what matters.
+
 ### What the numbers say
 
 1. Decoding is the biggest single effect: +9 to +11 points for the same adapter. Bigger than any
@@ -163,12 +199,7 @@ Ohman et al. 2020 report micro-F1 0.536 for English BERT on the full 17.5k lines
 Done: split, 5 required conditions on dev and test, 3 seeds, second model, threshold sweep,
 baselines, cleanup, README.
 
-Not done, needs GPU (commands in README / `run_all.sh`):
-- prompt wording sensitivity on dev (`--prompt short|long`, 8 runs, 4 min)
-- threshold decoding applied to 5-shot prompting (2 runs) for a decoding-matched comparison
-- `errors.py` output for the qualitative analysis (needs `runs/` from Habrok, rsync it to a laptop)
-
-Not done, no GPU:
+All experiments done. Not done:
 - report (8-12 pages, structure in brief section 6)
 - presentation
 - figures: label distribution, threshold sweep curve, per-label F1 heatmap
