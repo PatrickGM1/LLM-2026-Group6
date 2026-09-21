@@ -11,19 +11,12 @@ LABELS = ["anger", "anticipation", "disgust", "fear", "joy", "sadness", "surpris
 
 
 def parse_output(text):
-    m = re.search(r"\[.*?\]", text, re.S)
-    if not m:
-        return [0] * 8, True
     try:
-        items = json.loads(m.group())
-    except json.JSONDecodeError:
-        return [0] * 8, True
-    if not isinstance(items, list):
-        return [0] * 8, True
-    found = {x.strip().lower() for x in items if isinstance(x, str)} & set(LABELS)
-    if not found:
-        return [0] * 8, True
-    return [int(l in found) for l in LABELS], False
+        items = json.loads(re.search(r"\[.*?\]", text, re.S).group())
+        found = {x.strip().lower() for x in items if isinstance(x, str)} & set(LABELS)
+    except (AttributeError, json.JSONDecodeError):
+        found = set()
+    return [int(l in found) for l in LABELS], not found
 
 
 def evaluate(pred, gold, malformed=None, verbose=False):
@@ -37,7 +30,6 @@ def evaluate(pred, gold, malformed=None, verbose=False):
         "micro_recall": recall_score(gold, pred, average="micro", zero_division=0),
         "hamming_loss": hamming_loss(gold, pred),
         "exact_match": accuracy_score(gold, pred),
-        "empty_pred_rate": float((pred.sum(1) == 0).mean()),
     }
     if malformed is not None:
         m["malformed_rate"] = float(np.mean(malformed))

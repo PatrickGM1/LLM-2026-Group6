@@ -11,11 +11,10 @@ from pathlib import Path
 import torch
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, set_peft_model_state_dict
 from safetensors.torch import load_file
-from transformers import (AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, Trainer,
-                          TrainingArguments)
+from transformers import Trainer, TrainingArguments
 
 from llm_2026_group6.metrics import evaluate, parse_output
-from llm_2026_group6.prompt import ROOT, answer, build_messages, generate, load
+from llm_2026_group6.prompt import ROOT, answer, build_messages, generate, load, load_model
 
 LORA = dict(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM",
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"])
@@ -27,22 +26,14 @@ def make_examples(rows, train_on):
     return [(r[l], l, r["labels"]) for r in rows for l in langs]
 
 
-class ChatDataset(torch.utils.data.Dataset):
-    def __init__(self, examples, tok, max_len):
-        self.items = []
-        for text, lang, labels in examples:
-            prompt = tok.apply_chat_template(build_messages(text, lang, []), tokenize=False, add_generation_prompt=True)
-            p_ids = tok(prompt, add_special_tokens=False)["input_ids"]
-            a_ids = tok(answer(labels) + tok.eos_token, add_special_tokens=False)["input_ids"]
-            ids = (p_ids + a_ids)[:max_len]
-            lab = ([-100] * len(p_ids) + a_ids)[:max_len]
-            self.items.append({"input_ids": ids, "labels": lab})
-
-    def __len__(self):
-        return len(self.items)
-
-    def __getitem__(self, i):
-        return self.items[i]
+def encode(examples, tok):
+    items = []
+    for text, lang, labels in examples:
+        prompt = tok.apply_chat_template(build_messages(text, lang, []), tokenize=False, add_generation_prompt=True)
+        p_ids = tok(prompt, add_special_tokens=False)["input_ids"]
+        a_ids = tok(answer(labels) + tok.eos_token, add_special_tokens=False)["input_ids"]
+        items.append({"input_ids": (p_ids + a_ids)[:MAX_LEN], "labels": ([-100] * len(p_ids) + a_ids)[:MAX_LEN]})
+    return items
 
 
 def collate(batch, pad_id):
@@ -63,6 +54,7 @@ def main():
     ap.add_argument("--4bit", dest="four_bit", action="store_true", help="qlora, needed on small gpus")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--dev_limit", type=int, default=None, help="eval checkpoints on a subset of dev")
+    ap.add_argument("--limit", type=int, default=None, help="only first n train rows, for testing")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -70,15 +62,7 @@ def main():
     out = ROOT / "runs" / name
     out.mkdir(parents=True, exist_ok=True)
 
-    tok = AutoTokenizer.from_pretrained(args.model)
-    tok.padding_side = "left"
-    if tok.pad_token is None:
-        tok.pad_token = tok.eos_token
-
-    quant = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_use_double_quant=True,
-                               bnb_4bit_compute_dtype=torch.float16) if args.four_bit else None
-    model = AutoModelForCausalLM.from_pretrained(args.model, quantization_config=quant,
-                                                 dtype=torch.float16, device_map="auto")
+    model, tok = load_model(args.model, args.four_bit)
     if args.four_bit:
         model = prepare_model_for_kbit_training(model)
     model.gradient_checkpointing_enable()
@@ -90,7 +74,7 @@ def main():
             p.data = p.data.float()
     model.print_trainable_parameters()
 
-    train_ds = ChatDataset(make_examples(load("train"), args.train_on), tok, MAX_LEN)
+    train_ds = encode(make_examples(load("train")[: args.limit], args.train_on), tok)
     dev_rows = load("dev")[: args.dev_limit]
     print("train examples", len(train_ds), "dev rows", len(dev_rows))
 

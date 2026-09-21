@@ -8,13 +8,15 @@ import time
 from pathlib import Path
 
 import torch
+from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 from llm_2026_group6.metrics import LABELS, evaluate, parse_output
 
 ROOT = Path(__file__).resolve().parents[2]
 
-SYSTEM = """You classify the emotions expressed in a movie subtitle line.
+PROMPTS = {}
+PROMPTS["default"] = """You classify the emotions expressed in a movie subtitle line.
 The possible emotions are:
 - anger: hostility, irritation, rage
 - anticipation: expectation, looking forward to or awaiting something
@@ -27,10 +29,9 @@ The possible emotions are:
 A line can express one or several of these emotions.
 Answer only with a JSON list of the matching emotion names in English, for example ["joy", "surprise"]. Do not add anything else."""
 
-PROMPTS = {
-    "default": SYSTEM,
-    "short": """Which emotions does this subtitle line express? Choose from: anger, anticipation, disgust, fear, joy, sadness, surprise, trust. Several can apply. Reply with a JSON list of the chosen names, nothing else.""",
-    "long": """You are an annotator working on the XED emotion dataset. You will be shown a single line of movie dialogue, without any context. Your task is to decide which of Plutchik's eight basic emotions the speaker is expressing.
+PROMPTS["short"] = """Which emotions does this subtitle line express? Choose from: anger, anticipation, disgust, fear, joy, sadness, surprise, trust. Several can apply. Reply with a JSON list of the chosen names, nothing else."""
+
+PROMPTS["long"] = """You are an annotator working on the XED emotion dataset. You will be shown a single line of movie dialogue, without any context. Your task is to decide which of Plutchik's eight basic emotions the speaker is expressing.
 
 The eight emotions and what they cover:
 1. anger - the speaker is angry, hostile, annoyed or aggressive
@@ -45,8 +46,7 @@ The eight emotions and what they cover:
 Rules:
 - A line often expresses more than one emotion. Return all that clearly apply.
 - Use only the eight names above, in English, exactly as written.
-- Output format: a JSON list of strings, e.g. ["fear", "surprise"]. No explanation, no other text.""",
-}
+- Output format: a JSON list of strings, e.g. ["fear", "surprise"]. No explanation, no other text."""
 
 DEMO_IDS = [
     "en/1990/100405/4706696.xml.gz:1158|ro/1990/100405/5055019.xml.gz:1116",
@@ -65,7 +65,7 @@ def answer(labels):
     return json.dumps([l for l, v in zip(LABELS, labels) if v])
 
 
-def build_messages(text, lang, demos, system=SYSTEM):
+def build_messages(text, lang, demos, system=PROMPTS["default"]):
     msgs = [{"role": "system", "content": system}]
     for d in demos:
         msgs.append({"role": "user", "content": d[lang]})
@@ -74,12 +74,25 @@ def build_messages(text, lang, demos, system=SYSTEM):
     return msgs
 
 
-def build_prompts(tok, rows, lang, demos, system=SYSTEM):
+def build_prompts(tok, rows, lang, demos, system=PROMPTS["default"]):
     return [tok.apply_chat_template(build_messages(r[lang], lang, demos, system), tokenize=False,
                                     add_generation_prompt=True) for r in rows]
 
 
-def generate(model, tok, rows, lang, demos=(), batch=16, system=SYSTEM):
+def load_model(name, four_bit=False, adapter=None):
+    tok = AutoTokenizer.from_pretrained(name)
+    tok.padding_side = "left"
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    quant = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_use_double_quant=True,
+                               bnb_4bit_compute_dtype=torch.float16) if four_bit else None
+    model = AutoModelForCausalLM.from_pretrained(name, quantization_config=quant, dtype=torch.float16, device_map="auto")
+    if adapter:
+        model = PeftModel.from_pretrained(model, adapter)
+    return model, tok
+
+
+def generate(model, tok, rows, lang, demos=(), batch=16, system=PROMPTS["default"]):
     prompts = build_prompts(tok, rows, lang, demos, system)
     outputs = []
     t0 = time.time()
@@ -152,17 +165,7 @@ def main():
         by_id = {r["id"]: r for r in load("train")}
         demos = [by_id[i] for i in DEMO_IDS]
 
-    tok = AutoTokenizer.from_pretrained(args.model)
-    tok.padding_side = "left"
-    if tok.pad_token is None:
-        tok.pad_token = tok.eos_token
-    quant = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
-                               bnb_4bit_compute_dtype=torch.float16) if args.four_bit else None
-    model = AutoModelForCausalLM.from_pretrained(args.model, quantization_config=quant,
-                                                 dtype=torch.float16, device_map="auto")
-    if args.adapter:
-        from peft import PeftModel
-        model = PeftModel.from_pretrained(model, args.adapter)
+    model, tok = load_model(args.model, args.four_bit, args.adapter)
     model.eval()
 
     t0 = time.time()
