@@ -3,16 +3,27 @@
 Running log of decisions, findings and status. Read this first when coming back to the project.
 Brief is in `project_brief.md`. Code layout and commands are in the README.
 
-## The task in one paragraph
+## 1. Introduction & Motivation
 
 XED = movie subtitle lines labelled with Plutchik's 8 emotions (multi-label). English and Finnish are
 human annotated, everything else is projected through subtitle alignment. We got Romanian (band 5,
 "~9.7k lines"). Compare prompting (zero/five-shot) against LoRA fine-tuning of one small instruct model,
 on English and Romanian, with three fine-tuning conditions: English-only, Romanian-only, bilingual.
-Metrics: micro-F1 and samples-Jaccard primary, macro-F1 / micro-P / micro-R / Hamming secondary,
-per-label + exact match + malformed rate diagnostic.
 
-## Data: what we found and what we decided
+So the "band 5" language is effectively a ~5k line dataset once you require English alignment (see §3).
+That's a finding about projected data, not a bug.
+
+## 2. Background
+
+- XED (Ohman et al. 2020): emotion-annotated movie subtitles, 8 Plutchik emotions, multi-label.
+  English + Finnish human annotated, other languages projected through subtitle alignment, so our
+  Romanian labels are projected reference labels, not independent human judgements.
+- Two adaptation approaches we compare: prompting (zero-/five-shot, no weight updates) vs PEFT (LoRA,
+  low-rank adapters on a frozen base model).
+- Historical reference, not comparable (different data size, splits, neutral class): Ohman et al. 2020
+  report micro-F1 0.536 for English BERT on the full 17.5k lines. Discuss as a reference point only.
+
+## 3. Data and Task Setup
 
 Raw files in `data/raw/`, straight from the XED github repo.
 
@@ -40,21 +51,22 @@ Raw files in `data/raw/`, straight from the XED github repo.
   The splits are committed in `data/splits/` so everyone has the exact same files.
 - Label ids in the tsvs: 1 anger, 2 anticipation, 3 disgust, 4 fear, 5 joy, 6 sadness, 7 surprise,
   8 trust. Label order everywhere in the code is alphabetical (`metrics.LABELS`).
-- On average 1.43 labels per line, 43% of lines have more than one label. Matters for decoding (below).
+- On average 1.43 labels per line, 43% of lines have more than one label. Matters for decoding (§4).
+- Data formatting: training examples use the same chat format as the zero-shot prompt, answer = JSON
+  list of label names (see §4).
 
-So the "band 5" language is effectively a ~5k line dataset once you require English alignment.
-That's a finding about projected data, not a bug.
+## 4. Methodology
 
-## Models
+### Models
 
 - Primary: `Qwen/Qwen2.5-1.5B-Instruct`. Apache-2.0, has Romanian, fits on a 4GB laptop GPU in 4-bit
   and trains in fp16 on 8GB. Used for all 5 conditions.
 - Second (prompting only): `utter-project/EuroLLM-1.7B-Instruct`. Not gated, explicitly trained on
   Romanian, different model family. Chosen to test the "pretrained language coverage" question.
 - We also ran an XLM-R-base + LoRA classification head as an encoder baseline (notebook, later
-  deleted from the repo, see git history before commit fb6d80e). Numbers are below.
+  deleted from the repo, see git history before commit fb6d80e). Numbers are in §6.
 
-## Prompt
+### Prompt templates and demonstrations
 
 Same English system prompt for both languages (brief requires that). Defines the 8 labels, says
 several can apply, asks for a JSON list of label names. Five-shot uses 5 fixed train ids
@@ -62,10 +74,14 @@ several can apply, asks for a JSON list of label names. Five-shot uses 5 fixed t
 "But I want to be with you" aligned to "Nici o casă nu e veşnică" = "No house is eternal" - kept as
 an example of projection failure for the report). English demos for English lines, their Romanian
 counterparts for Romanian lines. Two rewordings (`--prompt short|long`) exist for the sensitivity
-analysis. Parser: first `[...]`, json.loads, lowercase+strip, keep permitted names only, dedupe.
-Anything else = empty set + malformed. No synonym mapping.
+analysis.
 
-## Fine-tuning
+### Output parser
+
+First `[...]`, json.loads, lowercase+strip, keep permitted names only, dedupe. Anything else = empty
+set + malformed. No synonym mapping.
+
+### Fine-tuning (LoRA)
 
 LoRA r=16, alpha=32, dropout 0.05 on q/k/v/o/gate/up/down, lr 2e-4 cosine, 3% warmup, effective
 batch 16, 3 epochs, max length 320, fp16 (LoRA weights kept in fp32 for the grad scaler), gradient
@@ -73,12 +89,9 @@ checkpointing. Loss only on the answer tokens (prompt tokens masked with -100). 
 the same chat format as prompting, zero-shot, answer = JSON list. Bilingual = both text columns of
 every train row (6,998 examples). Checkpoint per epoch, pick best dev micro-F1 on 500 dev rows
 (English dev for the English-only adapter, Romanian dev otherwise). Seeds 42, 1, 2.
-Everything is dumped to `runs/<name>/train_config.json`.
+Everything is dumped to `runs/<name>/train_config.json`. 18.5M trainable params (1.18%).
 
-Cost on an A100: 7 min per monolingual adapter, 14 min bilingual. 18.5M trainable params (1.18%).
-Same runs on an RTX 2070 SUPER: 26-38 min.
-
-## The decoding problem (main finding)
+### Decoding
 
 Greedy decoding of the JSON list gives **exactly one label per line** for every fine-tuned adapter
 (1.00 average, gold is 1.43). After the first label, `]` always beats `,` because no single second
@@ -86,25 +99,25 @@ label has >50% probability. Recall is capped, surprise/disgust/joy nearly never 
 
 Fix: `--threshold t` in `prompt.py`. Walk the labels in canonical order; at each step score the
 continuation `", "<label>` (or `["<label>` for the first) with teacher forcing and include the label if
-its probability > t. Tuned on Romanian dev with the bilingual adapter:
+its probability > t. Probabilities are products over several tokens, so useful t is small. Tuned on
+Romanian dev with the bilingual adapter (table in §6); **t=0.15 locked, used for every adapter and
+language.** The same thing showed up in the XLM-R baseline as sigmoid < 0.5 (51% empty predictions at
+0.5, fixed by tuning the threshold on dev to 0.1).
 
-| t | miF1 | jacc | prec | rec |
-|---|---|---|---|---|
-| greedy | 0.342 | 0.312 | 0.415 | 0.291 |
-| 0.05 | 0.365 | 0.254 | 0.233 | 0.839 |
-| 0.10 | 0.414 | 0.309 | 0.300 | 0.667 |
-| **0.15** | **0.415** | **0.325** | 0.351 | 0.507 |
-| 0.20 | 0.401 | 0.325 | 0.390 | 0.413 |
-| 0.30 | 0.354 | 0.291 | 0.448 | 0.293 |
+## 5. Evaluation Protocol
 
-t=0.15 locked, used for every adapter and language. Probabilities are products over several tokens,
-so useful t is small. Note Hamming loss gets worse with threshold decoding (more predictions) while
-both primary metrics improve - report the trade-off honestly.
+- Metrics (§7 of the brief): micro-F1 and samples-Jaccard primary, macro-F1 / micro-P / micro-R /
+  Hamming secondary, per-label + exact match + malformed rate diagnostic. All in `metrics.py`,
+  computed from the same binarized 8-label predictions, fixed alphabetical label order, sklearn
+  version recorded in each `metrics.json`. Zero-division policy = 0, applied consistently.
+- Seeds: 42, 1, 2 for the LoRA runs; mean +- std reported on test. Single seed 42 on dev.
+- Malformed-output policy: malformed or no-permitted-label output = empty predicted set, malformed
+  rate reported separately (prompted models only; adapters are 0%).
+- Controlled comparison: threshold decoding also applied to the prompting conditions so the PEFT vs
+  prompting comparison is decoding-matched (result in §6/§7).
+- Dev used for all selection (prompt, threshold, checkpoint). Test only for final reported numbers.
 
-The same thing showed up in the XLM-R baseline as sigmoid < 0.5 (51% empty predictions at 0.5, fixed
-by tuning the threshold on dev to 0.1).
-
-## Results
+## 6. Results
 
 ### Dev, micro-F1 (single seed 42)
 
@@ -139,8 +152,19 @@ by tuning the threshold on dev to 0.1).
 Malformed rate: Qwen 0-shot 16% EN / 11% RO (outputs `[anger]` without quotes), 5-shot ~2%,
 EuroLLM 0-shot 37% / 16%. Fine-tuned adapters 0%.
 
-Historical reference, not comparable (different data size, splits, neutral class):
-Ohman et al. 2020 report micro-F1 0.536 for English BERT on the full 17.5k lines.
+### Threshold sweep (bilingual adapter, Romanian dev)
+
+| t | miF1 | jacc | prec | rec |
+|---|---|---|---|---|
+| greedy | 0.342 | 0.312 | 0.415 | 0.291 |
+| 0.05 | 0.365 | 0.254 | 0.233 | 0.839 |
+| 0.10 | 0.414 | 0.309 | 0.300 | 0.667 |
+| **0.15** | **0.415** | **0.325** | 0.351 | 0.507 |
+| 0.20 | 0.401 | 0.325 | 0.390 | 0.413 |
+| 0.30 | 0.354 | 0.291 | 0.448 | 0.293 |
+
+Note Hamming loss gets worse with threshold decoding (more predictions) while both primary metrics
+improve - report the trade-off honestly.
 
 ### Prompt wording sensitivity (dev, micro-F1 / malformed rate)
 
@@ -165,18 +189,17 @@ decoding-matched comparison: it isn't a decoding artefact.
 
 zero 0.000, majority (always anger) 0.230, random at train label frequency 0.197.
 
-### Error analysis (test RO, bilingual LoRA t=0.15 vs 5-shot)
+### Figures (`plots.py` -> `docs/figures/`)
 
-485 rows: exact match LoRA-only 34, prompt-only 37, both wrong 398. Exact match is similar, the F1
-gap comes from partial credit on multi-label rows. Patterns:
-- LoRA over-predicts under the threshold ("Mi-am facut bagajele" gold joy -> anticipation,joy,trust).
-  That is the recall/precision trade the threshold buys.
-- Prompting emits non-permitted names ("anguish"), dropped by the parser as the brief requires.
-- Context-free lines are unlabelable: "Credeam ca sunt cel mai bun jucator din lume" (I thought I was
-  the best player in the world) gold = sadness. Only makes sense with the previous line.
-- Projection artefacts: "Am spart-o" gold anger,fear comes from English "Well, that broke that up".
-- Test contains near-duplicates differing only in diacritics ("Cooper, da-mi cuiele aici!" twice);
-  our dedup is on English text so both land in the same partition, which is what matters.
+`uv run python -m llm_2026_group6.plots` (no GPU, reads the splits + committed metrics):
+- `label_distribution.png` - per-label counts in train/dev/test. anger/anticipation frequent,
+  surprise/disgust rare, which lines up with where the F1 is low.
+- `threshold_sweep.png` - bilingual LoRA on RO dev, miF1/jacc/prec/rec vs t, greedy as dotted lines,
+  t=0.15 marked. Same numbers as the threshold table above.
+- `per_label_f1.png` - per-label F1 heatmap on RO test for 0-shot / 5-shot / LoRA EN/RO/both. Surprise
+  is black (0.00 zero-shot) and disgust next.
+
+## 7. Analysis & Discussion
 
 ### What the numbers say
 
@@ -194,18 +217,39 @@ gap comes from partial credit on multi-label rows. Patterns:
 7. Surprise is the hardest label everywhere. Disgust second. Anger/anticipation easiest (most frequent).
 8. The 110M XLM-R encoder is within 1 point of the 1.5B decoder on Romanian at 1/50th the cost.
 
-## Figures
+### Error analysis (test RO, bilingual LoRA t=0.15 vs 5-shot)
 
-`plots.py` makes the three report figures from the splits and the committed metrics (no GPU, no
-re-running needed): `uv run python -m llm_2026_group6.plots`. Written to `docs/figures/`:
-- `label_distribution.png` - per-label counts in train/dev/test. Shows anger/anticipation are the
-  frequent labels and surprise/disgust the rare ones, which lines up with where the F1 is low.
-- `threshold_sweep.png` - bilingual LoRA on RO dev, miF1/jacc/prec/rec vs t, greedy as dotted lines,
-  t=0.15 marked. Same numbers as the threshold table above.
-- `per_label_f1.png` - per-label F1 heatmap on RO test for 0-shot / 5-shot / LoRA EN/RO/both. Surprise
-  is black (0.00 zero-shot) and disgust next, the point from §7 of the results.
+485 rows: exact match LoRA-only 34, prompt-only 37, both wrong 398. Exact match is similar, the F1
+gap comes from partial credit on multi-label rows. Patterns:
+- LoRA over-predicts under the threshold ("Mi-am facut bagajele" gold joy -> anticipation,joy,trust).
+  That is the recall/precision trade the threshold buys.
+- Prompting emits non-permitted names ("anguish"), dropped by the parser as the brief requires.
+- Context-free lines are unlabelable: "Credeam ca sunt cel mai bun jucator din lume" (I thought I was
+  the best player in the world) gold = sadness. Only makes sense with the previous line.
+- Projection artefacts: "Am spart-o" gold anger,fear comes from English "Well, that broke that up".
+- Test contains near-duplicates differing only in diacritics ("Cooper, da-mi cuiele aici!" twice);
+  our dedup is on English text so both land in the same partition, which is what matters.
 
-## Status (2026-09-21)
+### Projected-label limitations
+
+Romanian labels are projected, not human. The context-free lines and projection artefacts in the
+error analysis above are the evidence for this. Don't blame cross-language differences on culture
+without direct evidence (the brief warns about this).
+
+## 8. Conclusion & Future Work
+
+Optional extensions if there's time: Qwen2.5-7B QLoRA, Danish-projected lines as extra RO training
+data, Romanian-language instructions.
+
+## 9. References / Appendix
+
+- Ohman et al. 2020, XED (COLING 2020). Historical reference only (see §2).
+- Appendix candidates: full prompts (default/short/long), the full `summary.py` table, the threshold
+  sweep, per-label tables.
+
+---
+
+## Status (2026-10-09)
 
 Done: split, 5 required conditions on dev and test, 3 seeds, second model, threshold sweep,
 baselines, cleanup, README, the three figures (`plots.py`).
@@ -214,15 +258,15 @@ All experiments and figures done. Not done (not our job - teammates):
 - report (8-12 pages, structure in brief section 6)
 - presentation
 
-Optional extensions if there's time: Qwen2.5-7B QLoRA, Danish-projected lines as extra RO training
-data, Romanian-language instructions.
-
 ## Where results live
 
 `runs/` is gitignored. The full set is on Habrok at `/scratch/s5560535/LLM-2026-Group6/runs/`.
 One folder per run: `preds.jsonl` (every row: text, raw output, parsed pred, gold, probs) and
 `metrics.json` (all metrics + config), or `train_config.json` + `best/` adapter for training runs.
 `summary.py` prints everything as one table.
+
+Cost: on an A100, 7 min per monolingual adapter, 14 min bilingual. Same runs on an RTX 2070 SUPER:
+26-38 min.
 
 ## Environment gotchas
 
