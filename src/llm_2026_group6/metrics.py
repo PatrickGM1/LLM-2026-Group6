@@ -4,6 +4,7 @@ import json
 import re
 
 import numpy as np
+import sklearn
 from sklearn.metrics import (accuracy_score, classification_report, f1_score, hamming_loss,
                              jaccard_score, precision_score, recall_score)
 
@@ -11,21 +12,12 @@ LABELS = ["anger", "anticipation", "disgust", "fear", "joy", "sadness", "surpris
 
 
 def parse_output(text):
-    """model text -> (8-dim 0/1 list, malformed flag)
-    only lowercase/whitespace normalisation, no synonym mapping. anything weird = empty + malformed"""
-    m = re.search(r"\[.*?\]", text, re.S)
-    if not m:
-        return [0] * 8, True
     try:
-        items = json.loads(m.group())
-    except json.JSONDecodeError:
-        return [0] * 8, True
-    if not isinstance(items, list):
-        return [0] * 8, True
-    found = {x.strip().lower() for x in items if isinstance(x, str)} & set(LABELS)
-    if not found:
-        return [0] * 8, True
-    return [int(l in found) for l in LABELS], False
+        items = json.loads(re.search(r"\[.*?\]", text, re.S).group())
+        found = {x.strip().lower() for x in items if isinstance(x, str)} & set(LABELS)
+    except (AttributeError, json.JSONDecodeError):
+        found = set()
+    return [int(l in found) for l in LABELS], not found
 
 
 def evaluate(pred, gold, malformed=None, verbose=False):
@@ -39,14 +31,14 @@ def evaluate(pred, gold, malformed=None, verbose=False):
         "micro_recall": recall_score(gold, pred, average="micro", zero_division=0),
         "hamming_loss": hamming_loss(gold, pred),
         "exact_match": accuracy_score(gold, pred),
-        "empty_pred_rate": float((pred.sum(1) == 0).mean()),
     }
     if malformed is not None:
         m["malformed_rate"] = float(np.mean(malformed))
     m["per_label"] = classification_report(gold, pred, target_names=LABELS, zero_division=0, output_dict=True)
+    m["sklearn"] = sklearn.__version__
     if verbose:
         for k, v in m.items():
-            if k != "per_label":
+            if isinstance(v, float):
                 print(f"{k:16s} {v:.4f}")
         print(classification_report(gold, pred, target_names=LABELS, zero_division=0, digits=3))
     return m

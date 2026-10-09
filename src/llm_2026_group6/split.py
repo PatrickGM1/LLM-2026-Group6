@@ -7,19 +7,11 @@ from pathlib import Path
 import numpy as np
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 
+from llm_2026_group6.metrics import LABELS
+
 SEED = 42
 DATA = Path(__file__).resolve().parents[2] / "data"
 RAW = DATA / "raw"
-LABELS = [
-    "anger",
-    "anticipation",
-    "disgust",
-    "fear",
-    "joy",
-    "sadness",
-    "surprise",
-    "trust",
-]
 
 
 def norm(s):
@@ -48,14 +40,7 @@ for en_file, ro_file, en_idx, ro_idx, en, ro in read_tsv(RAW / "pairs-ro.txt", 6
     if not en_file.startswith("en/") or k not in ro_labels or k in seen:
         continue
     seen.add(k)
-    rows.append(
-        {
-            "id": f"{en_file}:{en_idx}|{ro_file}:{ro_idx}",
-            "en": en,
-            "ro": ro,
-            "labels": to_vec(ro_labels[k]),
-        }
-    )
+    rows.append({"id": f"{en_file}:{en_idx}|{ro_file}:{ro_idx}", "en": en, "ro": ro, "labels": to_vec(ro_labels[k])})
 
 # group by english text so stuff like "Yes." doesn't end up in both train and test
 groups = defaultdict(list)
