@@ -194,15 +194,25 @@ gap comes from partial credit on multi-label rows. Patterns:
 7. Surprise is the hardest label everywhere. Disgust second. Anger/anticipation easiest (most frequent).
 8. The 110M XLM-R encoder is within 1 point of the 1.5B decoder on Romanian at 1/50th the cost.
 
+## Figures
+
+`plots.py` makes the three report figures from the splits and the committed metrics (no GPU, no
+re-running needed): `uv run python -m llm_2026_group6.plots`. Written to `docs/figures/`:
+- `label_distribution.png` - per-label counts in train/dev/test. Shows anger/anticipation are the
+  frequent labels and surprise/disgust the rare ones, which lines up with where the F1 is low.
+- `threshold_sweep.png` - bilingual LoRA on RO dev, miF1/jacc/prec/rec vs t, greedy as dotted lines,
+  t=0.15 marked. Same numbers as the threshold table above.
+- `per_label_f1.png` - per-label F1 heatmap on RO test for 0-shot / 5-shot / LoRA EN/RO/both. Surprise
+  is black (0.00 zero-shot) and disgust next, the point from §7 of the results.
+
 ## Status (2026-09-21)
 
 Done: split, 5 required conditions on dev and test, 3 seeds, second model, threshold sweep,
-baselines, cleanup, README.
+baselines, cleanup, README, the three figures (`plots.py`).
 
-All experiments done. Not done:
+All experiments and figures done. Not done (not our job - teammates):
 - report (8-12 pages, structure in brief section 6)
 - presentation
-- figures: label distribution, threshold sweep curve, per-label F1 heatmap
 
 Optional extensions if there's time: Qwen2.5-7B QLoRA, Danish-projected lines as extra RO training
 data, Romanian-language instructions.
